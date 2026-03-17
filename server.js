@@ -10,10 +10,23 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 function get(hostname, path, useHttp = false) {
   return new Promise((resolve, reject) => {
     const mod = useHttp ? http : https;
+    const isPlay = hostname === '123movienow.cc';
     mod.request({
       hostname, path,
-      headers: { 'User-Agent': UA, 'Referer': useHttp ? 'https://123movienow.cc/' : 'https://moviebox.ph/' }
+      headers: {
+        'User-Agent': UA,
+        'Referer': isPlay ? 'https://123movienow.cc/' : 'https://moviebox.ph/',
+        'Origin': isPlay ? 'https://123movienow.cc' : 'https://moviebox.ph',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'x-requested-with': 'XMLHttpRequest'
+      }
     }, res => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        const loc = res.headers.location;
+        const u = new URL(loc);
+        return get(u.hostname, u.pathname + u.search, u.protocol === 'http:').then(resolve).catch(reject);
+      }
       let d = '';
       res.on('data', c => d += c);
       res.on('end', () => resolve(d));
@@ -133,7 +146,7 @@ async function extractStreams(slug, se, ep, lang, quality) {
   const playPath = `/wefeed-h5api-bff/subject/play?subjectId=${streamId}&se=${finalSe}&ep=${finalEp}&detailPath=${streamSlug}`;
 
   // Fetch play + captions in parallel (captions need stream id, so play first then captions)
-  const playData = await get('123movienow.cc', playPath, true);
+  const playData = await get('123movienow.cc', playPath, false).catch(() => get('123movienow.cc', playPath, true));
   const playJson = JSON.parse(playData);
   if (playJson.code !== 0) throw new Error(playJson.message || 'Failed to get streams');
 
