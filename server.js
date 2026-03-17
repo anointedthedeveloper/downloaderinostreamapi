@@ -7,6 +7,14 @@ const PORT = process.env.PORT || 7860;
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+function genUuid() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+const SESSION_UUID = genUuid();
+
 const cache = new Map();
 function cached(key, ttlMs, fn) {
   const hit = cache.get(key);
@@ -26,7 +34,8 @@ function get(hostname, path, useHttp = false) {
         'Origin': isPlay ? 'https://123movienow.cc' : 'https://moviebox.ph',
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'en-US,en;q=0.9',
-        'x-requested-with': 'XMLHttpRequest'
+        'x-requested-with': 'XMLHttpRequest',
+        ...(isPlay ? { 'cookie': `uuid=${SESSION_UUID}`, 'x-client-info': '{"timezone":"America/New_York"}' } : {})
       }
     }, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
@@ -173,7 +182,7 @@ async function extractStreams(slug, se, ep, lang, quality) {
 
   const isMovie = detail.type === 'movie';
   const finalSe = isMovie ? (se || '0') : (se || '1');
-  const finalEp = ep || '1';
+  const finalEp = isMovie ? '0' : (ep ? String(parseInt(ep) - 1) : '0');
 
   let streamSlug = detail.slug;
   let streamId = detail.subjectId;
