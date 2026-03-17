@@ -1,87 +1,48 @@
 const express = require('express');
 const https = require('https');
-const { chromium } = require('playwright');
+const http = require('http');
 
 const app = express();
 const PORT = process.env.PORT || 7860;
 
-const BLOCKED = [
-  'google-analytics', 'firebase', 'hisavana', 'doubleclick',
-  'googlesyndication', 'adservice', 'analytics', 'firebaselogging', 'firebaseinstallations'
-];
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-let browser;
-const streamPages = [];
-const MAX_PAGES = parseInt(process.env.MAX_PAGES || '3');
-const queue = [];
-
-async function initBrowser() {
-  browser = await chromium.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-  });
-  for (let i = 0; i < MAX_PAGES; i++) {
-    const page = await browser.newPage();
-    await page.route('**/*', route => {
-      if (BLOCKED.some(b => route.request().url().includes(b))) return route.abort();
-      route.continue();
-    });
-    streamPages.push({ page, busy: false });
-  }
-  console.log(`Browser ready with ${MAX_PAGES} stream pages`);
-}
-
-function getFreePage() {
-  return new Promise(resolve => {
-    const slot = streamPages.find(p => !p.busy);
-    if (slot) { slot.busy = true; return resolve(slot); }
-    queue.push(resolve);
-  });
-}
-
-function releasePage(slot) {
-  slot.busy = false;
-  if (queue.length > 0) { const next = queue.shift(); slot.busy = true; next(slot); }
-}
-
-function httpGet(hostname, path) {
+function get(hostname, path, useHttp = false) {
   return new Promise((resolve, reject) => {
-    https.request({
+    const mod = useHttp ? http : https;
+    mod.request({
       hostname, path,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://moviebox.ph/'
-      }
+      headers: { 'User-Agent': UA, 'Referer': useHttp ? 'https://123movienow.cc/' : 'https://moviebox.ph/' }
     }, res => {
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => resolve(data));
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => resolve(d));
     }).on('error', reject).end();
   });
 }
 
-function resolveNuxt(arr, idx, visited = new Map()) {
-  if (visited.has(idx)) return visited.get(idx);
-  const val = arr[idx];
-  if (val === null || typeof val !== 'object') { visited.set(idx, val); return val; }
-  if (Array.isArray(val)) {
-    if (val[0] === 'ShallowReactive' || val[0] === 'Reactive') return resolveNuxt(arr, val[1], visited);
-    const r = val.map(i => typeof i === 'number' ? resolveNuxt(arr, i, visited) : i);
-    visited.set(idx, r); return r;
+function resolveNuxt(arr, idx, seen = new Map()) {
+  if (seen.has(idx)) return seen.get(idx);
+  const v = arr[idx];
+  if (v === null || typeof v !== 'object') { seen.set(idx, v); return v; }
+  if (Array.isArray(v)) {
+    if (v[0] === 'ShallowReactive' || v[0] === 'Reactive') return resolveNuxt(arr, v[1], seen);
+    const r = v.map(i => typeof i === 'number' ? resolveNuxt(arr, i, seen) : i);
+    seen.set(idx, r); return r;
   }
-  const r = {}; visited.set(idx, r);
-  for (const [k, v] of Object.entries(val)) r[k] = typeof v === 'number' ? resolveNuxt(arr, v, visited) : v;
+  const r = {}; seen.set(idx, r);
+  for (const [k, val] of Object.entries(v)) r[k] = typeof val === 'number' ? resolveNuxt(arr, val, seen) : val;
   return r;
 }
 
 async function search(keyword) {
-  const html = await httpGet('moviebox.ph', `/web/searchResult?keyword=${encodeURIComponent(keyword)}`);
-  const match = html.match(/id="__NUXT_DATA__">([\s\S]+?)<\/script>/);
-  if (!match) throw new Error('Could not parse search page');
-  const arr = JSON.parse(match[1]);
+  const html = await get('moviebox.ph', `/web/searchResult?keyword=${encodeURIComponent(keyword)}`);
+  const m = html.match(/id="__NUXT_DATA__">([\s\S]+?)<\/script>/);
+  if (!m) throw new Error('Could not parse search page');
+  const arr = JSON.parse(m[1]);
   const resolved = resolveNuxt(arr, 0);
-  const dataKeys = Object.keys(resolved?.data || {});
-  const items = resolved?.data?.[dataKeys[1]]?.data?.items;
+  const keys = Object.keys(resolved?.data || {});
+  const items = resolved?.data?.[keys[1]]?.data?.items;
   if (!items) throw new Error('No results found');
   return items.map(item => ({
     slug: item.detailPath,
@@ -93,35 +54,33 @@ async function search(keyword) {
     country: item.countryName,
     imdbRating: item.imdbRatingValue,
     cover: item.cover?.url || null,
-    thumbnail: item.stills?.[0]?.url || item.cover?.url || null,
     hasResource: item.hasResource,
     detailUrl: `https://moviebox.ph/detail/${item.detailPath}`
   }));
 }
 
 async function getDetail(slug) {
-  const raw = await httpGet('h5-api.aoneroom.com', `/wefeed-h5api-bff/detail?detailPath=${slug}`);
+  const raw = await get('h5-api.aoneroom.com', `/wefeed-h5api-bff/detail?detailPath=${slug}`);
   const json = JSON.parse(raw);
   if (json.code !== 0) throw new Error(json.message);
   const s = json.data.subject;
   const isMovie = s.subjectType === 1;
 
+  const availableDubs = (s.dubs || []).filter(d => d.type === 0).map(d => ({
+    lang: d.lanCode, name: d.lanName, slug: d.detailPath, subjectId: d.subjectId
+  }));
+  const availableSubs = (s.dubs || []).filter(d => d.type === 1).map(d => ({
+    lang: d.lanCode, name: d.lanName, slug: d.detailPath, subjectId: d.subjectId
+  }));
+
   const seasons = (json.data.resource?.seasons || []).map(season => ({
     season: season.se,
     totalEpisodes: season.maxEp,
-    resolutions: season.resolutions,
+    resolutions: season.resolutions?.map(r => r.resolution) || [],
     episodes: Array.from({ length: season.maxEp }, (_, i) => ({
       episode: i + 1,
       streamUrl: `/stream?slug=${s.detailPath}&se=${season.se}&ep=${i + 1}`
     }))
-  }));
-
-  const availableDubs = (s.dubs || []).filter(d => d.type === 0).map(d => ({
-    lang: d.lanCode, name: d.lanName, slug: d.detailPath, subjectId: d.subjectId,
-    streamUrl: isMovie ? `/stream?slug=${d.detailPath}` : null
-  }));
-  const availableSubs = (s.dubs || []).filter(d => d.type === 1).map(d => ({
-    lang: d.lanCode, name: d.lanName, slug: d.detailPath, subjectId: d.subjectId
   }));
 
   return {
@@ -136,7 +95,7 @@ async function getDetail(slug) {
     country: s.countryName,
     imdbRating: s.imdbRatingValue,
     imdbRatingCount: s.imdbRatingCount,
-    subtitles: s.subtitles ? s.subtitles.split(',').map(s => s.trim()) : [],
+    subtitles: s.subtitles ? s.subtitles.split(',').map(x => x.trim()) : [],
     availableDubs,
     availableSubs,
     cover: s.cover?.url || null,
@@ -148,90 +107,79 @@ async function getDetail(slug) {
   };
 }
 
-function httpGetHttp(hostname, path) {
-  return new Promise((resolve, reject) => {
-    const http = require('http');
-    http.request({
-      hostname, path,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://123movienow.cc/'
-      }
-    }, res => {
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => resolve(data));
-    }).on('error', reject).end();
-  });
-}
-
 async function extractStreams(slug, se, ep, lang, quality) {
-  const detail = await getDetail(slug);
+  // Fetch detail and play API in parallel
+  const [detail, playRaw] = await Promise.all([
+    getDetail(slug),
+    (() => {
+      // We need detail first to resolve lang/dub slug — do a quick pre-fetch for play
+      // Will be re-used after detail resolves
+      return null;
+    })()
+  ]);
 
-  let finalSe = se;
-  let finalEp = ep;
-  if (detail.type === 'movie') { finalSe = se || '0'; finalEp = ep || '1'; }
+  const isMovie = detail.type === 'movie';
+  const finalSe = isMovie ? (se || '0') : (se || '1');
+  const finalEp = ep || '1';
 
   let streamSlug = detail.slug;
   let streamId = detail.subjectId;
   if (lang && lang !== 'en') {
-    const dub = [...(detail.availableDubs || []), ...(detail.availableSubs || [])]
+    const dub = [...detail.availableDubs, ...detail.availableSubs]
       .find(d => d.lang === lang || d.name.toLowerCase().includes(lang.toLowerCase()));
     if (dub) { streamSlug = dub.slug; streamId = dub.subjectId; }
   }
 
-  // Direct API call — no Playwright needed for quality selection
   const playPath = `/wefeed-h5api-bff/subject/play?subjectId=${streamId}&se=${finalSe}&ep=${finalEp}&detailPath=${streamSlug}`;
-  const raw = await httpGetHttp('123movienow.cc', playPath);
-  const json = JSON.parse(raw);
 
-  if (json.code !== 0) throw new Error(json.message || 'Failed to get streams');
+  // Fetch play + captions in parallel (captions need stream id, so play first then captions)
+  const playData = await get('123movienow.cc', playPath, true);
+  const playJson = JSON.parse(playData);
+  if (playJson.code !== 0) throw new Error(playJson.message || 'Failed to get streams');
 
-  const allStreams = (json.data.streams || []).map(s => ({
+  const rawStreams = playJson.data.streams || [];
+
+  // Fetch captions in parallel with nothing else to wait for
+  const captionsPromise = rawStreams[0]?.id
+    ? get('h5-api.aoneroom.com', `/wefeed-h5api-bff/subject/caption?format=MP4&id=${rawStreams[0].id}&subjectId=${streamId}&detailPath=${streamSlug}`)
+        .then(r => JSON.parse(r))
+        .then(r => r.code === 0 ? r.data.captions.map(c => ({ lang: c.lan, name: c.lanName, url: c.url })) : [])
+        .catch(() => [])
+    : Promise.resolve([]);
+
+  const allStreams = rawStreams.map(s => ({
     url: s.url,
     quality: s.resolutions ? `${s.resolutions}p` : 'unknown',
     resolution: parseInt(s.resolutions) || 0,
     format: s.format,
     size: parseInt(s.size) || 0,
     duration: s.duration
-  }));
+  })).sort((a, b) => b.resolution - a.resolution);
 
-  // Filter by quality if requested
-  let streams = allStreams;
-  if (quality) {
-    const q = parseInt(quality);
-    const match = allStreams.find(s => s.resolution === q);
-    if (match) streams = [match];
-  }
+  const streams = quality
+    ? allStreams.filter(s => s.resolution === parseInt(quality))
+    : allStreams;
 
-  // Also fetch captions if available
-  let captions = [];
-  if (allStreams.length > 0 && json.data.streams?.[0]?.id) {
-    try {
-      const capRaw = await httpGet('h5-api.aoneroom.com',
-        `/wefeed-h5api-bff/subject/caption?format=MP4&id=${json.data.streams[0].id}&subjectId=${streamId}&detailPath=${streamSlug}`);
-      const capJson = JSON.parse(capRaw);
-      if (capJson.code === 0) {
-        captions = (capJson.data.captions || []).map(c => ({ lang: c.lan, name: c.lanName, url: c.url }));
-      }
-    } catch {}
-  }
-
-  const playerUrl = `https://123movienow.cc/spa/videoPlayPage/movies/${streamSlug}?id=${streamId}&type=/movie/detail&detailSe=${finalSe}&detailEp=${finalEp}&lang=en`;
+  const captions = await captionsPromise;
 
   return {
     title: detail.title,
     type: detail.type,
-    season: finalSe !== '0' ? finalSe : null,
-    episode: finalEp !== '1' || detail.type === 'series' ? finalEp : null,
+    season: isMovie ? null : finalSe,
+    episode: isMovie ? null : finalEp,
+    cover: detail.cover,
+    description: detail.description,
+    imdbRating: detail.imdbRating,
+    cast: detail.cast,
     availableQualities: allStreams.map(s => s.quality),
+    availableDubs: detail.availableDubs,
+    availableSubs: detail.availableSubs,
     streams,
     captions,
-    playerUrl
+    playerUrl: `https://123movienow.cc/spa/videoPlayPage/movies/${streamSlug}?id=${streamId}&type=/movie/detail&detailSe=${finalSe}&detailEp=${finalEp}&lang=en`
   };
 }
 
-// Routes
 app.get('/search', (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'q is required' });
@@ -251,11 +199,20 @@ app.get('/stream', (req, res) => {
 });
 
 app.get('/', (req, res) => res.json({
+  name: 'Movie Stream API',
   endpoints: {
-    search: '/search?q=<keyword>',
-    detail: '/detail?slug=<slug>',
-    stream: '/stream?slug=<slug>&se=<season>&ep=<episode>&lang=<langCode>&quality=<360|480|720|1080>'
-  }
+    'GET /search': { params: { q: 'keyword' } },
+    'GET /detail': { params: { slug: 'detailPath' } },
+    'GET /stream': { params: { slug: 'detailPath', se: 'season (series)', ep: 'episode (series)', lang: 'dub lang code', quality: '360|480|720|1080' } }
+  },
+  examples: [
+    '/search?q=zootopia',
+    '/detail?slug=zootopia-SxDV9XZ5kg6',
+    '/stream?slug=zootopia-SxDV9XZ5kg6',
+    '/stream?slug=zootopia-SxDV9XZ5kg6&quality=720',
+    '/stream?slug=the-simpsons-2nXz41q46j9&se=1&ep=1',
+    '/stream?slug=the-simpsons-2nXz41q46j9&se=1&ep=1&lang=fr&quality=1080'
+  ]
 }));
 
-app.listen(PORT, () => console.log(`Stream API running on http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Stream API on http://localhost:${PORT}`));
