@@ -13,6 +13,53 @@ Base URL: `https://anointedthedeveloper-streamarino.hf.space`
 
 ---
 
+## `GET /home`
+
+Returns homepage sections (Popular Series, Popular Movie, Anime, Upcoming Calendar, etc.).
+
+**Request:**
+```
+GET /home
+```
+
+**Response:**
+```json
+{
+  "sections": [
+    {
+      "title": "Popular Series",
+      "items": [
+        {
+          "slug": "one-piece-netflix-qL3bmkP9Rr1",
+          "subjectId": "1216407338207298384",
+          "title": "One Piece",
+          "type": "series",
+          "releaseDate": "2023-08-31",
+          "genre": "Action,Adventure,Comedy",
+          "country": "United Kingdom",
+          "imdbRating": 8.3,
+          "cover": "https://cdn.example.com/cover.jpg",
+          "corner": null
+        }
+      ]
+    },
+    {
+      "title": "Upcoming Calendar",
+      "items": [
+        {
+          "slug": "the-boys-c8bx84KzD76",
+          "title": "The Boys",
+          "appointmentDate": "2026-04-08",
+          "bookedCount": 35245
+        }
+      ]
+    }
+  ]
+}
+```
+
+---
+
 ## `GET /search`
 
 Search for movies and series.
@@ -175,6 +222,10 @@ GET /stream?slug=the-simpsons-2nXz41q46j9&se=1&ep=1&lang=fr&quality=1080
 
 ```js
 const BASE = 'https://anointedthedeveloper-streamarino.hf.space';
+  
+// 0. Get homepage sections
+const { sections } = await fetch(`${BASE}/home`).then(r => r.json());
+// sections[0].title => "Popular Series", sections[0].items => [...]
 
 // 1. Search
 const { results } = await fetch(`${BASE}/search?q=zootopia`).then(r => r.json());

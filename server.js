@@ -48,6 +48,39 @@ function resolveNuxt(arr, idx, seen = new Map()) {
   return r;
 }
 
+function mapSubject(s) {
+  return {
+    slug: s.detailPath,
+    subjectId: s.subjectId,
+    title: s.title,
+    type: s.subjectType === 1 ? 'movie' : 'series',
+    releaseDate: s.releaseDate,
+    genre: s.genre,
+    country: s.countryName,
+    imdbRating: parseFloat(s.imdbRatingValue) || null,
+    cover: s.cover?.url || null,
+    corner: s.corner || null
+  };
+}
+
+async function getHome() {
+  const raw = await get('h5-api.aoneroom.com', '/wefeed-h5api-bff/home');
+  const json = JSON.parse(raw);
+  if (json.code !== 0) throw new Error(json.message);
+  const sections = [];
+  for (const op of json.data.operatingList || []) {
+    if (op.type === 'SUBJECTS_MOVIE' && op.subjects?.length) {
+      sections.push({ title: op.title, items: op.subjects.map(mapSubject) });
+    } else if (op.type === 'APPOINTMENT_LIST' && op.subjects?.length) {
+      sections.push({
+        title: op.title,
+        items: op.subjects.map(s => ({ ...mapSubject(s), appointmentDate: s.appointmentDate, bookedCount: s.appointmentCnt }))
+      });
+    }
+  }
+  return sections;
+}
+
 async function search(keyword) {
   const html = await get('moviebox.ph', `/web/searchResult?keyword=${encodeURIComponent(keyword)}`);
   const m = html.match(/id="__NUXT_DATA__">([\s\S]+?)<\/script>/);
@@ -193,6 +226,10 @@ async function extractStreams(slug, se, ep, lang, quality) {
   };
 }
 
+app.get('/home', (req, res) => {
+  getHome().then(sections => res.json({ sections })).catch(err => res.status(500).json({ error: err.message }));
+});
+
 app.get('/search', (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'q is required' });
@@ -214,6 +251,7 @@ app.get('/stream', (req, res) => {
 app.get('/', (req, res) => res.json({
   name: 'Movie Stream API',
   endpoints: {
+    'GET /home': { description: 'Homepage sections (Popular Series, Popular Movie, Anime, etc.)' },
     'GET /search': { params: { q: 'keyword' } },
     'GET /detail': { params: { slug: 'detailPath' } },
     'GET /stream': { params: { slug: 'detailPath', se: 'season (series)', ep: 'episode (series)', lang: 'dub lang code', quality: '360|480|720|1080' } }
