@@ -1,0 +1,24 @@
+{
+  "name": "downloaderinostreamapi",
+  "version": "1.0.0",
+  "description": "",
+  "main": "extract_stream.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anointedthedeveloper/downloaderinostreamapi.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/anointedthedeveloper/downloaderinostreamapi/issues"
+  },
+  "homepage": "https://github.com/anointedthedeveloper/downloaderinostreamapi#readme",
+  "dependencies": {
+    "express": "^4.22.1"
+  }
+}
