@@ -7,13 +7,7 @@ const PORT = process.env.PORT || 7860;
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-function genUuid() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-    const r = Math.random() * 16 | 0;
-    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-  });
-}
-const SESSION_UUID = genUuid();
+const SESSION_UUID = 'b1c6436e-1189-429d-b563-3fba63cd3e9e';
 
 const cache = new Map();
 function cached(key, ttlMs, fn) {
