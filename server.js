@@ -1,20 +1,25 @@
 const express = require('express');
 const https = require('https');
-const { chromium } = require('c:\\Users\\Admin\\.agents\\skills\\playwright\\node_modules\\playwright');
+const { chromium } = require('playwright');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 7860;
 
-const BLOCKED = ['google-analytics', 'firebase', 'hisavana', 'doubleclick', 'googlesyndication', 'adservice', 'analytics', 'firebaselogging', 'firebaseinstallations'];
+const BLOCKED = [
+  'google-analytics', 'firebase', 'hisavana', 'doubleclick',
+  'googlesyndication', 'adservice', 'analytics', 'firebaselogging', 'firebaseinstallations'
+];
 
 let browser;
 const streamPages = [];
-const MAX_PAGES = 3;
+const MAX_PAGES = parseInt(process.env.MAX_PAGES || '3');
 const queue = [];
-let activeJobs = 0;
 
 async function initBrowser() {
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+  });
   for (let i = 0; i < MAX_PAGES; i++) {
     const page = await browser.newPage();
     await page.route('**/*', route => {
@@ -36,22 +41,18 @@ function getFreePage() {
 
 function releasePage(slot) {
   slot.busy = false;
-  if (queue.length > 0) {
-    const next = queue.shift();
-    slot.busy = true;
-    next(slot);
-  }
+  if (queue.length > 0) { const next = queue.shift(); slot.busy = true; next(slot); }
 }
 
-// Plain HTTPS GET
-function httpGet(hostname, path, reqHeaders = {}) {
+function httpGet(hostname, path) {
   return new Promise((resolve, reject) => {
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Referer': 'https://moviebox.ph/',
-      ...reqHeaders
-    };
-    https.request({ hostname, path, headers }, res => {
+    https.request({
+      hostname, path,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://moviebox.ph/'
+      }
+    }, res => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => resolve(data));
@@ -59,39 +60,29 @@ function httpGet(hostname, path, reqHeaders = {}) {
   });
 }
 
-// Parse __NUXT_DATA__ array into resolved objects
 function resolveNuxt(arr, idx, visited = new Map()) {
   if (visited.has(idx)) return visited.get(idx);
   const val = arr[idx];
   if (val === null || typeof val !== 'object') { visited.set(idx, val); return val; }
   if (Array.isArray(val)) {
     if (val[0] === 'ShallowReactive' || val[0] === 'Reactive') return resolveNuxt(arr, val[1], visited);
-    const result = val.map(i => (typeof i === 'number' ? resolveNuxt(arr, i, visited) : i));
-    visited.set(idx, result);
-    return result;
+    const r = val.map(i => typeof i === 'number' ? resolveNuxt(arr, i, visited) : i);
+    visited.set(idx, r); return r;
   }
-  const result = {};
-  visited.set(idx, result);
-  for (const [k, v] of Object.entries(val)) {
-    result[k] = typeof v === 'number' ? resolveNuxt(arr, v, visited) : v;
-  }
-  return result;
+  const r = {}; visited.set(idx, r);
+  for (const [k, v] of Object.entries(val)) r[k] = typeof v === 'number' ? resolveNuxt(arr, v, visited) : v;
+  return r;
 }
 
-// Search via SSR HTML — no Playwright, instant
 async function search(keyword) {
-  const html = await httpGet('moviebox.ph', `/web/searchResult?keyword=${encodeURIComponent(keyword)}`, { 'Accept': 'text/html' });
+  const html = await httpGet('moviebox.ph', `/web/searchResult?keyword=${encodeURIComponent(keyword)}`);
   const match = html.match(/id="__NUXT_DATA__">([\s\S]+?)<\/script>/);
-  if (!match) throw new Error('Could not find NUXT data');
-
+  if (!match) throw new Error('Could not parse search page');
   const arr = JSON.parse(match[1]);
   const resolved = resolveNuxt(arr, 0);
-  // Second key in data holds search results (first key is SEO/TDK metadata)
   const dataKeys = Object.keys(resolved?.data || {});
-  const searchKey = dataKeys[1];
-  const items = resolved?.data?.[searchKey]?.data?.items;
-  if (!items) throw new Error('No search results found');
-
+  const items = resolved?.data?.[dataKeys[1]]?.data?.items;
+  if (!items) throw new Error('No results found');
   return items.map(item => ({
     slug: item.detailPath,
     subjectId: item.subjectId,
@@ -108,12 +99,13 @@ async function search(keyword) {
   }));
 }
 
-// Full detail from h5-api
 async function getDetail(slug) {
   const raw = await httpGet('h5-api.aoneroom.com', `/wefeed-h5api-bff/detail?detailPath=${slug}`);
   const json = JSON.parse(raw);
   if (json.code !== 0) throw new Error(json.message);
   const s = json.data.subject;
+  const isMovie = s.subjectType === 1;
+
   const seasons = (json.data.resource?.seasons || []).map(season => ({
     season: season.se,
     totalEpisodes: season.maxEp,
@@ -124,127 +116,146 @@ async function getDetail(slug) {
     }))
   }));
 
+  const availableDubs = (s.dubs || []).filter(d => d.type === 0).map(d => ({
+    lang: d.lanCode, name: d.lanName, slug: d.detailPath, subjectId: d.subjectId,
+    streamUrl: isMovie ? `/stream?slug=${d.detailPath}` : null
+  }));
+  const availableSubs = (s.dubs || []).filter(d => d.type === 1).map(d => ({
+    lang: d.lanCode, name: d.lanName, slug: d.detailPath, subjectId: d.subjectId
+  }));
+
   return {
     subjectId: s.subjectId,
     slug: s.detailPath,
     title: s.title,
-    type: s.subjectType === 1 ? 'movie' : 'series',
+    type: isMovie ? 'movie' : 'series',
     description: s.description,
     releaseDate: s.releaseDate,
+    duration: s.duration || null,
     genre: s.genre,
     country: s.countryName,
     imdbRating: s.imdbRatingValue,
     imdbRatingCount: s.imdbRatingCount,
-    subtitles: s.subtitles ? s.subtitles.split(',') : [],
-    availableDubs: (s.dubs || []).filter(d => d.type === 0).map(d => ({ lang: d.lanCode, name: d.lanName, slug: d.detailPath, subjectId: d.subjectId })),
-    availableSubs: (s.dubs || []).filter(d => d.type === 1).map(d => ({ lang: d.lanCode, name: d.lanName, slug: d.detailPath, subjectId: d.subjectId })),
-    dubs: s.dubs || [],
+    subtitles: s.subtitles ? s.subtitles.split(',').map(s => s.trim()) : [],
+    availableDubs,
+    availableSubs,
     cover: s.cover?.url || null,
     trailer: s.trailer?.videoAddress?.url || null,
     trailerThumbnail: s.trailer?.cover?.url || null,
-    cast: (json.data.stars || []).map(st => ({
-      name: st.name,
-      character: st.character,
-      avatar: st.avatarUrl
-    })),
-    seasons,
-    streamUrl: s.subjectType === 1 ? `/stream?slug=${s.detailPath}` : null
+    cast: (json.data.stars || []).map(st => ({ name: st.name, character: st.character, avatar: st.avatarUrl })),
+    seasons: isMovie ? [] : seasons,
+    streamUrl: isMovie ? `/stream?slug=${s.detailPath}` : null
   };
 }
 
-// Extract stream URLs using persistent Playwright page
-async function extractStreams(slug, se, ep, lang) {
+function httpGetHttp(hostname, path) {
+  return new Promise((resolve, reject) => {
+    const http = require('http');
+    http.request({
+      hostname, path,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://123movienow.cc/'
+      }
+    }, res => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => resolve(data));
+    }).on('error', reject).end();
+  });
+}
+
+async function extractStreams(slug, se, ep, lang, quality) {
   const detail = await getDetail(slug);
 
-  // For movies: use se=0&ep=1 if not specified
   let finalSe = se;
   let finalEp = ep;
-  if (detail.type === 'movie') {
-    finalSe = se || '0';
-    finalEp = ep || '1';
-  }
+  if (detail.type === 'movie') { finalSe = se || '0'; finalEp = ep || '1'; }
 
-  // If lang requested, find matching dub slug
   let streamSlug = detail.slug;
   let streamId = detail.subjectId;
   if (lang && lang !== 'en') {
-    const dub = detail.dubs.find(d => d.lanCode === lang || d.lanName.toLowerCase().includes(lang.toLowerCase()));
-    if (dub) { streamSlug = dub.detailPath; streamId = dub.subjectId; }
+    const dub = [...(detail.availableDubs || []), ...(detail.availableSubs || [])]
+      .find(d => d.lang === lang || d.name.toLowerCase().includes(lang.toLowerCase()));
+    if (dub) { streamSlug = dub.slug; streamId = dub.subjectId; }
+  }
+
+  // Direct API call — no Playwright needed for quality selection
+  const playPath = `/wefeed-h5api-bff/subject/play?subjectId=${streamId}&se=${finalSe}&ep=${finalEp}&detailPath=${streamSlug}`;
+  const raw = await httpGetHttp('123movienow.cc', playPath);
+  const json = JSON.parse(raw);
+
+  if (json.code !== 0) throw new Error(json.message || 'Failed to get streams');
+
+  const allStreams = (json.data.streams || []).map(s => ({
+    url: s.url,
+    quality: s.resolutions ? `${s.resolutions}p` : 'unknown',
+    resolution: parseInt(s.resolutions) || 0,
+    format: s.format,
+    size: parseInt(s.size) || 0,
+    duration: s.duration
+  }));
+
+  // Filter by quality if requested
+  let streams = allStreams;
+  if (quality) {
+    const q = parseInt(quality);
+    const match = allStreams.find(s => s.resolution === q);
+    if (match) streams = [match];
+  }
+
+  // Also fetch captions if available
+  let captions = [];
+  if (allStreams.length > 0 && json.data.streams?.[0]?.id) {
+    try {
+      const capRaw = await httpGet('h5-api.aoneroom.com',
+        `/wefeed-h5api-bff/subject/caption?format=MP4&id=${json.data.streams[0].id}&subjectId=${streamId}&detailPath=${streamSlug}`);
+      const capJson = JSON.parse(capRaw);
+      if (capJson.code === 0) {
+        captions = (capJson.data.captions || []).map(c => ({ lang: c.lan, name: c.lanName, url: c.url }));
+      }
+    } catch {}
   }
 
   const playerUrl = `https://123movienow.cc/spa/videoPlayPage/movies/${streamSlug}?id=${streamId}&type=/movie/detail&detailSe=${finalSe}&detailEp=${finalEp}&lang=en`;
 
-  const slot = await getFreePage();
-  const seen = new Set();
-  const streams = [];
-
-  const handler = request => {
-    const url = request.url();
-    if ((url.includes('.m3u8') || url.includes('.mp4')) && !seen.has(url)) {
-      seen.add(url);
-      streams.push({ url, headers: request.headers() });
-    }
-  };
-
-  slot.page.on('request', handler);
-  try {
-    await slot.page.goto(playerUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    try {
-      const playBtn = slot.page.locator('.vjs-big-play-button').first();
-      await playBtn.waitFor({ timeout: 5000 });
-      await playBtn.click();
-    } catch {}
-
-    await new Promise(resolve => {
-      const interval = setInterval(() => {
-        if (streams.length > 0) { clearInterval(interval); clearTimeout(timer); resolve(); }
-      }, 300);
-      const timer = setTimeout(() => { clearInterval(interval); resolve(); }, 20000);
-    });
-  } finally {
-    slot.page.off('request', handler);
-    releasePage(slot);
-  }
-
   return {
     title: detail.title,
     type: detail.type,
-    season: finalSe || null,
-    episode: finalEp || null,
-    playerUrl,
-    streams
+    season: finalSe !== '0' ? finalSe : null,
+    episode: finalEp !== '1' || detail.type === 'series' ? finalEp : null,
+    availableQualities: allStreams.map(s => s.quality),
+    streams,
+    captions,
+    playerUrl
   };
 }
 
-// GET /search?q=zootopia
+// Routes
 app.get('/search', (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'q is required' });
-  search(q)
-    .then(results => res.json({ results }))
-    .catch(err => res.status(500).json({ error: err.message }));
+  search(q).then(results => res.json({ results })).catch(err => res.status(500).json({ error: err.message }));
 });
 
-// GET /detail?slug=zootopia-SxDV9XZ5kg6
 app.get('/detail', (req, res) => {
   const { slug } = req.query;
   if (!slug) return res.status(400).json({ error: 'slug is required' });
-  getDetail(slug)
-    .then(detail => res.json(detail))
-    .catch(err => res.status(500).json({ error: err.message }));
+  getDetail(slug).then(d => res.json(d)).catch(err => res.status(500).json({ error: err.message }));
 });
 
-// GET /stream?slug=zootopia-SxDV9XZ5kg6
-// GET /stream?slug=nesting-8urWu5BPho7&se=1&ep=3
-// GET /stream?slug=the-simpsons-2nXz41q46j9&se=1&ep=1&lang=fr  (dub by lang code)
 app.get('/stream', (req, res) => {
-  const { slug, se, ep, lang } = req.query;
+  const { slug, se, ep, lang, quality } = req.query;
   if (!slug) return res.status(400).json({ error: 'slug is required' });
-  extractStreams(slug, se, ep, lang)
-    .then(result => res.json(result))
-    .catch(err => res.status(500).json({ error: err.message }));
+  extractStreams(slug, se, ep, lang, quality).then(r => res.json(r)).catch(err => res.status(500).json({ error: err.message }));
 });
 
-initBrowser().then(() => {
-  app.listen(PORT, () => console.log(`Stream API running on http://localhost:${PORT}`));
-});
+app.get('/', (req, res) => res.json({
+  endpoints: {
+    search: '/search?q=<keyword>',
+    detail: '/detail?slug=<slug>',
+    stream: '/stream?slug=<slug>&se=<season>&ep=<episode>&lang=<langCode>&quality=<360|480|720|1080>'
+  }
+}));
+
+app.listen(PORT, () => console.log(`Stream API running on http://localhost:${PORT}`));

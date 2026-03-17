@@ -1,1 +1,9 @@
-node_modules
+node_modules/
+*.log
+page.html
+search.html
+sniff*.js
+findapi.js
+extract_stream.js
+.zenflow/
+.zencoder/
