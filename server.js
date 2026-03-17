@@ -236,7 +236,19 @@ async function extractStreams(slug, se, ep, lang, quality) {
   };
 }
 
-app.get('/home', (req, res) => {
+app.get('/playurl', (req, res) => {
+  const { slug, se, ep, subjectId } = req.query;
+  if (!slug || !subjectId) return res.status(400).json({ error: 'slug and subjectId are required' });
+  const isMovie = !se || se === '0';
+  const finalSe = isMovie ? '0' : se;
+  const finalEp = isMovie ? '0' : (ep ? String(parseInt(ep) - 1) : '0');
+  res.json({
+    playApiUrl: `https://123movienow.cc/wefeed-h5api-bff/subject/play?subjectId=${subjectId}&se=${finalSe}&ep=${finalEp}&detailPath=${slug}`,
+    headers: { 'Origin': 'https://123movienow.cc', 'Referer': 'https://123movienow.cc/', 'Accept': 'application/json', 'x-client-info': '{"timezone":"America/New_York"}' }
+  });
+});
+
+
   cached('home', 5 * 60 * 1000, getHome)
     .then(sections => res.json({ sections })).catch(err => res.status(500).json({ error: err.message }));
 });
