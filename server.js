@@ -46,7 +46,7 @@ function getPlay(slug, path) {
         'User-Agent': UA,
         'Referer': playerUrl,
         'Accept': 'application/json',
-        'x-client-info': `{"timezone":"${Intl.DateTimeFormat().resolvedOptions().timeZone}"}`,
+        'x-client-info': `{"timezone":"Africa/Lagos"}`,
         'x-source': ''
       }
     }, res => {
