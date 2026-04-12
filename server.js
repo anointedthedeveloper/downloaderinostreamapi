@@ -265,6 +265,8 @@ app.get('/playurl', (req, res) => {
   });
 });
 
+app.get('/version', (req, res) => res.json({ version: '1.4.0' }));
+
 app.get('/home', (req, res) => {
   cached('home', 5 * 60 * 1000, getHome)
     .then(sections => res.json({ sections })).catch(err => res.status(500).json({ error: err.message }));
