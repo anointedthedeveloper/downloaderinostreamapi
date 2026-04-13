@@ -192,12 +192,30 @@ async function extractStreams(slug, se, ep, lang, quality) {
   }
 
   const playPath = `/wefeed-h5api-bff/subject/play?subjectId=${streamId}&se=${finalSe}&ep=${finalEp}&detailPath=${streamSlug}`;
+  const playerUrl = `https://123movienow.cc/spa/videoPlayPage/movies/${streamSlug}?id=${streamId}&type=/movie/detail&detailSe=${finalSe}&detailEp=${finalEp}&lang=en`;
+  const clientPlayUrl = `https://123movienow.cc/wefeed-h5api-bff/subject/play?subjectId=${streamId}&se=${finalSe}&ep=${finalEp}&detailPath=${streamSlug}`;
+  const clientHeaders = { 'Referer': playerUrl, 'Accept': 'application/json', 'x-client-info': '{"timezone":"Africa/Lagos"}', 'x-source': '' };
 
-  const playData = await getPlay(streamSlug, playPath, null, streamId, finalSe, finalEp);
-  const playJson = JSON.parse(playData);
-  if (playJson.code !== 0) throw new Error(playJson.message || 'Failed to get streams');
+  const base = {
+    title: detail.title, type: detail.type,
+    season: isMovie ? null : finalSe, episode: isMovie ? null : finalEp,
+    cover: detail.cover, description: detail.description, imdbRating: detail.imdbRating,
+    cast: detail.cast, availableDubs: detail.availableDubs, availableSubs: detail.availableSubs,
+    playerUrl, clientPlayUrl, clientHeaders
+  };
 
-  const rawStreams = playJson.data?.streams || playJson.data?.resource?.streams || [];
+  let playJson;
+  try {
+    playJson = JSON.parse(await getPlay(streamSlug, playPath, null, streamId, finalSe, finalEp));
+  } catch (e) {
+    return { ...base, availableQualities: [], streams: [], captions: [], note: 'region blocked' };
+  }
+
+  if (playJson.code !== 0 || !playJson.data?.hasResource) {
+    return { ...base, availableQualities: [], streams: [], captions: [], note: 'region blocked — use clientPlayUrl from browser with clientHeaders' };
+  }
+
+  const rawStreams = playJson.data.streams || [];
 
   const captionsPromise = rawStreams[0]?.id
     ? get('h5-api.aoneroom.com', `/wefeed-h5api-bff/subject/caption?format=MP4&id=${rawStreams[0].id}&subjectId=${streamId}&detailPath=${streamSlug}`)
@@ -215,28 +233,10 @@ async function extractStreams(slug, se, ep, lang, quality) {
     duration: s.duration
   })).sort((a, b) => b.resolution - a.resolution);
 
-  const streams = quality
-    ? allStreams.filter(s => s.resolution === parseInt(quality))
-    : allStreams;
-
+  const streams = quality ? allStreams.filter(s => s.resolution === parseInt(quality)) : allStreams;
   const captions = await captionsPromise;
 
-  return {
-    title: detail.title,
-    type: detail.type,
-    season: isMovie ? null : finalSe,
-    episode: isMovie ? null : finalEp,
-    cover: detail.cover,
-    description: detail.description,
-    imdbRating: detail.imdbRating,
-    cast: detail.cast,
-    availableQualities: allStreams.map(s => s.quality),
-    availableDubs: detail.availableDubs,
-    availableSubs: detail.availableSubs,
-    streams,
-    captions,
-    playerUrl: `https://123movienow.cc/spa/videoPlayPage/movies/${streamSlug}?id=${streamId}&type=/movie/detail&detailSe=${finalSe}&detailEp=${finalEp}&lang=en`
-  };
+  return { ...base, availableQualities: allStreams.map(s => s.quality), streams, captions };
 }
 
 app.get('/debug/play', async (req, res) => {
@@ -265,7 +265,7 @@ app.get('/playurl', (req, res) => {
   });
 });
 
-app.get('/version', (req, res) => res.json({ version: '1.5.0' }));
+app.get('/version', (req, res) => res.json({ version: '1.6.0' }));
 
 app.get('/home', (req, res) => {
   cached('home', 5 * 60 * 1000, getHome)
@@ -296,7 +296,7 @@ app.get('/stream', (req, res) => {
 
 app.get('/', (req, res) => res.json({
   name: 'Movie Stream API',
-  version: '1.5.0',
+  version: '1.6.0',
   endpoints: {
     'GET /home': { description: 'Homepage sections (Popular Series, Popular Movie, Anime, etc.)' },
     'GET /search': { params: { q: 'keyword' } },
