@@ -212,7 +212,7 @@ async function extractStreams(slug, se, ep, lang, quality) {
   }
 
   if (playJson.code !== 0 || !playJson.data?.hasResource) {
-    return { ...base, availableQualities: [], streams: [], captions: [], note: 'region blocked — use clientPlayUrl from browser with clientHeaders' };
+    return { ...base, availableQualities: [], streams: [], captions: [] };
   }
 
   const rawStreams = playJson.data.streams || [];
