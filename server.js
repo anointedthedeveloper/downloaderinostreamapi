@@ -89,7 +89,7 @@ function mapSubject(s) {
 async function getHome() {
   const raw = await get('h5-api.aoneroom.com', '/wefeed-h5api-bff/home');
   const json = JSON.parse(raw);
-  if (json.code !== 0) throw new Error(json.message);
+  if (json.code !== 0) { const err = new Error(json.message); err.statusCode = 502; throw err; }
   const sections = [];
   for (const op of json.data.operatingList || []) {
     if (op.type === 'SUBJECTS_MOVIE' && op.subjects?.length) {
@@ -131,7 +131,11 @@ async function search(keyword) {
 async function getDetail(slug) {
   const raw = await get('h5-api.aoneroom.com', `/wefeed-h5api-bff/detail?detailPath=${slug}`);
   const json = JSON.parse(raw);
-  if (json.code !== 0) throw new Error(json.message);
+  if (json.code !== 0) {
+    const err = new Error(json.message || 'Not found');
+    err.statusCode = json.code === 404 ? 404 : 502;
+    throw err;
+  }
   const s = json.data.subject;
   const isMovie = s.subjectType === 1;
 
@@ -283,7 +287,7 @@ app.get('/detail', (req, res) => {
   const { slug } = req.query;
   if (!slug) return res.status(400).json({ error: 'slug is required' });
   cached(`detail:${slug}`, 10 * 60 * 1000, () => getDetail(slug))
-    .then(d => res.json(d)).catch(err => res.status(500).json({ error: err.message }));
+    .then(d => res.json(d)).catch(err => res.status(err.statusCode || 500).json({ error: err.message }));
 });
 
 app.get('/stream', (req, res) => {
@@ -291,7 +295,7 @@ app.get('/stream', (req, res) => {
   if (!slug) return res.status(400).json({ error: 'slug is required' });
   const key = `stream:${slug}:${se}:${ep}:${lang}:${quality}`;
   cached(key, 2 * 60 * 1000, () => extractStreams(slug, se, ep, lang, quality))
-    .then(r => res.json(r)).catch(err => res.status(500).json({ error: err.message }));
+    .then(r => res.json(r)).catch(err => res.status(err.statusCode || 500).json({ error: err.message }));
 });
 
 app.get('/', (req, res) => res.json({
